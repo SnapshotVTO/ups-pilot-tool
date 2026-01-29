@@ -5,14 +5,15 @@ import tempfile
 import os
 import zipfile
 
-# --- STANDARD 2025 IMPORTS ---
-# These specific paths work with the requirements.txt provided.
+# --- ROBUST IMPORTS ---
+# We removed the problematic 'RetrievalQA' import.
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="UPS Pilot Assistant", page_icon="✈️", layout="wide")
@@ -75,43 +76,52 @@ with st.sidebar:
 # --- TABS ---
 tab1, tab2 = st.tabs(["💬 Contract Chat", "📊 Fatigue Calculator"])
 
-# --- TAB 1: CHATBOT ---
+# --- TAB 1: CHATBOT (Manual RAG Method) ---
 with tab1:
     st.title("UPS Contract & Systems Expert")
     if st.session_state.vector_store and api_key:
+        
+        # CHAT LOGIC (No 'RetrievalQA' chain used)
         llm = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=api_key)
-        
-        template = """
-        You are an expert UPS Pilot Assistant. 
-        Use the context (Contract, AOM, FOM) to answer the question.
-        Cite your source (Article or Section).
-        
-        Context: {context}
-        Question: {question}
-        Answer:
-        """
-        QA_PROMPT = PromptTemplate(template=template, input_variables=["context", "question"])
-        
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=st.session_state.vector_store.as_retriever(search_kwargs={"k": 4}),
-            chain_type_kwargs={"prompt": QA_PROMPT}
-        )
+        retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 4})
 
+        # Display Chat History
         for role, msg in st.session_state.chat_history:
             st.chat_message(role).write(msg)
 
         if prompt := st.chat_input("Ask a question..."):
             st.chat_message("user").write(prompt)
             st.session_state.chat_history.append(("user", prompt))
+            
             with st.spinner("Checking manuals..."):
                 try:
-                    response = qa_chain.run(prompt)
+                    # 1. Retrieve relevant docs manually
+                    docs = retriever.invoke(prompt)
+                    context_text = "\n\n".join([d.page_content for d in docs])
+                    
+                    # 2. Build the prompt
+                    system_prompt = f"""
+                    You are an expert UPS Pilot Assistant. 
+                    Answer the question using ONLY the context below.
+                    If the answer is in the Contract, cite the Article.
+                    If in the AOM/FOM, cite the Section.
+                    
+                    Context:
+                    {context_text}
+                    
+                    Question: {prompt}
+                    """
+                    
+                    # 3. Ask GPT-4
+                    response_msg = llm.invoke(system_prompt)
+                    response = response_msg.content
+                    
                 except Exception as e:
                     response = f"Error: {e}"
+            
             st.chat_message("assistant").write(response)
             st.session_state.chat_history.append(("assistant", response))
+
     elif not api_key:
         st.info("👈 Enter API Key to start.")
 
