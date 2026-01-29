@@ -5,13 +5,30 @@ import tempfile
 import os
 import zipfile
 
-# --- TIME MACHINE IMPORTS (Compatible with 0.1.0) ---
+# --- TIME MACHINE IMPORTS (Compatible with langchain 0.1.0) ---
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
+
+# --- PAGE SETTINGS ---
+st.set_page_config(page_title="UPS Pilot Assistant", page_icon="✈️", layout="wide")
+
+# --- MEMORY (SESSION STATE) ---
+if "chat_history" not in st.session_state: st.session_state.chat_history = []
+if "vector_store" not in st.session_state: st.session_state.vector_store = None
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.header("🛠 Configuration")
+    api_key = st.text_input("OpenAI API Key", type="password")
+    
+    st.divider()
+    st.header("📚 Manuals & Contract")
+    st.info("Upload PDF or ZIP files (Contract, AOM, FOM).")
+    uploaded_files = st.file_uploader("Drop files here", accept_multiple_files=True, type=["pdf", "zip"])
     
     if uploaded_files and api_key and st.button("Process Documents"):
         with st.spinner("Unzipping and reading manuals... (This takes 1-2 mins)"):
@@ -69,7 +86,7 @@ with tab1:
     st.markdown("Ask about the **Contract** ('Can I drop this trip?') or **Aircraft** ('Max crosswind 747?')")
     
     if st.session_state.vector_store and api_key:
-        llm = ChatOpenAI(model_name="gpt-4o", temperature=0, openai_api_key=api_key)
+        llm = ChatOpenAI(model_name="gpt-4", temperature=0, openai_api_key=api_key)
         
         # INSTRUCTIONS FOR THE AI
         template = """
