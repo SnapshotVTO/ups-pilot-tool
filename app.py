@@ -5,19 +5,14 @@ import tempfile
 import os
 import zipfile
 
-# --- LIBRARIES FOR AI/PDF READING ---
+# --- STABLE IMPORTS ---
+# These are strictly aligned with the pinned requirements.txt
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
-
-# --- PAGE SETTINGS ---
-st.set_page_config(page_title="UPS Pilot Assistant", page_icon="✈️", layout="wide")
-
-# --- MEMORY (SESSION STATE) ---
-if "chat_history" not in st.session_state: st.session_state.chat_history = []
+from langchain_core.prompts import PromptTemplate
 if "vector_store" not in st.session_state: st.session_state.vector_store = None
 
 # --- SIDEBAR ---
