@@ -5,9 +5,9 @@ import tempfile
 import os
 import zipfile
 
-# --- TIME MACHINE IMPORTS (Compatible with langchain 0.1.0) ---
+# --- MODERN IMPORTS (Matches the flexible requirements) ---
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import RetrievalQA
@@ -20,7 +20,7 @@ st.set_page_config(page_title="UPS Pilot Assistant", page_icon="✈️", layout=
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "vector_store" not in st.session_state: st.session_state.vector_store = None
 
-# --- SIDEBAR ---
+# --- SIDEBAR: CONFIG & UPLOADS ---
 with st.sidebar:
     st.header("🛠 Configuration")
     api_key = st.text_input("OpenAI API Key", type="password")
@@ -52,8 +52,8 @@ with st.sidebar:
                                             docs = loader.load()
                                             for d in docs: d.metadata["source"] = file # Tag source
                                             all_docs.extend(docs)
-                        except:
-                            st.error(f"Error reading zip: {uploaded_file.name}")
+                        except Exception as e:
+                            st.error(f"Error reading zip: {e}")
 
                     # LOGIC: HANDLE REGULAR PDF
                     elif uploaded_file.name.endswith(".pdf"):
@@ -86,7 +86,7 @@ with tab1:
     st.markdown("Ask about the **Contract** ('Can I drop this trip?') or **Aircraft** ('Max crosswind 747?')")
     
     if st.session_state.vector_store and api_key:
-        llm = ChatOpenAI(model_name="gpt-4", temperature=0, openai_api_key=api_key)
+        llm = ChatOpenAI(model_name="gpt-4o", temperature=0, openai_api_key=api_key)
         
         # INSTRUCTIONS FOR THE AI
         template = """
@@ -101,6 +101,7 @@ with tab1:
         Question: {question}
         Answer:
         """
+        
         QA_PROMPT = PromptTemplate(template=template, input_variables=["context", "question"])
         
         qa_chain = RetrievalQA.from_chain_type(
@@ -119,7 +120,10 @@ with tab1:
             st.session_state.chat_history.append(("user", prompt))
             
             with st.spinner("Checking manuals..."):
-                response = qa_chain.run(prompt)
+                try:
+                    response = qa_chain.run(prompt)
+                except Exception as e:
+                    response = f"Error: {e}"
             
             st.chat_message("assistant").write(response)
             st.session_state.chat_history.append(("assistant", response))
@@ -133,52 +137,110 @@ with tab1:
 # --- TAB 2: FATIGUE MODEL ---
 with tab2:
     st.title("Fatigue Risk Analyzer")
+    st.markdown("Model based on SAFTE-style decay and UPS Contract Rules.")
     
-    # FATIGUE LOGIC (Embedded here for simplicity)
-    def calculate_fatigue(dept_time, block_hrs, is_intl):
-        # Simplified SAFTE-style math
+    # FATIGUE LOGIC
+    def calculate_fatigue_trip(report_dt, flights, is_intl):
         timeline = []
-        # Start full (100% capacity)
-        reservoir = 100 
-        current_t = dept_time
+        reservoir = 2800 # "Fuel" for alertness (approx minutes)
         
-        # Loop hour by hour
-        for i in range(int(block_hrs) + 4): # Preflight + Flight + Post
+        current_t = report_dt
+        
+        # Determine Duty End (Debrief)
+        last_arrival = flights[-1]['arr']
+        debrief_min = 30 if is_intl else 15
+        duty_end = last_arrival + timedelta(minutes=debrief_min)
+        
+        # Simulation Loop (15 min increments)
+        while current_t <= duty_end:
+            # 1. Circadian Factor (WOCL 0200-0600 Home Base)
             hour = current_t.hour
-            
-            # Circadian Low (WOCL) 0200-0600 home base
             circadian_pen = 0
-            if 2 <= hour <= 6: circadian_pen = 15
+            if 2 <= hour <= 6: circadian_pen = 20 # Heavy WOCL Hit
             
-            # Depletion
-            if i == 0: activity = "Report"; decay = 2
-            elif i <= block_hrs + 1: activity = "Fly"; decay = 4
-            else: activity = "Debrief"; decay = 2
+            # 2. Activity Factor
+            decay = 0
+            activity = "Duty"
             
+            # Check if Flying
+            for f in flights:
+                if f['dept'] <= current_t <= f['arr']:
+                    activity = "Fly"
+                    block = (f['arr'] - f['dept']).total_seconds() / 3600
+                    
+                    # Augmentation Rules
+                    crew = 2
+                    if is_intl:
+                        if block >= 12.0: crew = 4
+                        elif block > 7.75: crew = 3
+                    
+                    # Decay Rates
+                    if crew == 2: decay = 5
+                    elif crew == 3: decay = 3.5
+                    elif crew == 4: decay = 2.5
+                    break
+            
+            if activity == "Duty": decay = 4 # Ground duty is tiring
+            
+            # Update Reservoir
             reservoir -= decay
-            effectiveness = max(0, reservoir - circadian_pen)
             
+            # Calculate Effectiveness (0-100%)
+            # Max reservoir is 2800. 
+            eff_score = (reservoir / 2800) * 100 - circadian_pen
+            eff_score = max(0, min(100, eff_score))
+            
+            # Color Coding
             color = "🟢"
-            if effectiveness < 90: color = "🟡"
-            if effectiveness < 80: color = "🟠"
-            if effectiveness < 75: color = "🔴"
+            if eff_score < 90: color = "🟡"
+            if eff_score < 85: color = "🟠"
+            if eff_score < 80: color = "🔴"
+            if eff_score < 75: color = "🟣"
             
-            timeline.append({"Time": current_t.strftime("%H:%M"), "Eff": effectiveness, "Risk": color})
-            current_t += timedelta(hours=1)
+            timeline.append({
+                "Time": current_t.strftime("%H:%M"),
+                "Activity": activity,
+                "Effectiveness": round(eff_score, 1),
+                "Risk": color
+            })
+            
+            current_t += timedelta(minutes=60) # Step 1 hour for graph
             
         return pd.DataFrame(timeline)
 
     # INPUTS
     col1, col2 = st.columns(2)
     with col1:
-        f_date = st.date_input("Flight Date")
-        f_time = st.time_input("Report Time", datetime.now().time())
+        start_date = st.date_input("Trip Start Date")
+        report_time = st.time_input("Report Time (Local)", datetime.strptime("08:00", "%H:%M").time())
+        origin = st.text_input("Origin", "SDF")
+        
     with col2:
-        blk = st.number_input("Block Hours", 5.0)
-        intl = st.checkbox("International Rules?")
+        dest = st.text_input("Destination", "ICN")
+        block_hrs = st.number_input("Block Hours", 13.5)
+        intl_rules = st.checkbox("International Rules?", value=True)
 
-    if st.button("Analyze Trip"):
-        dt = datetime.combine(f_date, f_time)
-        res = calculate_fatigue(dt, blk, intl)
-        st.dataframe(res, use_container_width=True)
-        st.line_chart(res.set_index("Time")["Eff"])
+    if st.button("Run Analysis"):
+        # Construct Duty
+        report_dt = datetime.combine(start_date, report_time)
+        
+        # Calculate Flight Times (Simplified for single leg demo)
+        # In full app, user would add multiple legs
+        dept_buffer = 1.5 if intl_rules else 1.0 # 1:30 prior vs 1:00 prior
+        dept_dt = report_dt + timedelta(hours=dept_buffer)
+        arr_dt = dept_dt + timedelta(hours=block_hrs)
+        
+        flights = [{'dept': dept_dt, 'arr': arr_dt}]
+        
+        # Run Model
+        results = calculate_fatigue_trip(report_dt, flights, intl_rules)
+        
+        # Display Metrics
+        min_eff = results['Effectiveness'].min()
+        st.metric("Minimum Effectiveness", f"{min_eff}%")
+        
+        # Display Table
+        st.dataframe(results, use_container_width=True)
+        
+        # Display Chart
+        st.line_chart(results.set_index("Time")["Effectiveness"])
