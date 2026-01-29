@@ -6,6 +6,4 @@ faiss-cpu
 pypdf
 langchain
 langchain-community
-langchain-core
 langchain-openai
-langchain-text-splitters
