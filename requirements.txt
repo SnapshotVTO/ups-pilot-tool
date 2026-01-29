@@ -1,10 +1,9 @@
 streamlit
 pandas
-langchain
-langchain-community
-langchain-openai
-langchain-text-splitters
+tiktoken
 faiss-cpu
 pypdf
-tiktoken
 openai
+langchain==0.1.0
+langchain-community==0.0.10
+langchain-openai==0.0.2
