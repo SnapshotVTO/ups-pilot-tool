@@ -5,13 +5,12 @@ import tempfile
 import os
 import zipfile
 
-# --- CLASSIC IMPORTS (LangChain 0.0.350) ---
-# These paths are guaranteed to exist in this version.
-from langchain.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.chat_models import ChatOpenAI
+# --- MODERN IMPORTS (The Fix) ---
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+# This is the specific fix for your error:
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 
@@ -33,7 +32,7 @@ with st.sidebar:
     uploaded_files = st.file_uploader("Drop files here", accept_multiple_files=True, type=["pdf", "zip"])
     
     if uploaded_files and api_key and st.button("Process Documents"):
-        with st.spinner("Unzipping and reading manuals..."):
+        with st.spinner("Processing manuals... (This may take 1-2 mins)"):
             all_docs = []
             with tempfile.TemporaryDirectory() as temp_dir:
                 for uploaded_file in uploaded_files:
@@ -66,6 +65,8 @@ with st.sidebar:
             if all_docs:
                 text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
                 chunks = text_splitter.split_documents(all_docs)
+                
+                # New Embedding Call
                 embeddings = OpenAIEmbeddings(openai_api_key=api_key)
                 st.session_state.vector_store = FAISS.from_documents(chunks, embeddings)
                 st.success(f"Success! Analyzed {len(chunks)} sections.")
@@ -79,7 +80,7 @@ tab1, tab2 = st.tabs(["💬 Contract Chat", "📊 Fatigue Calculator"])
 with tab1:
     st.title("UPS Contract & Systems Expert")
     if st.session_state.vector_store and api_key:
-        llm = ChatOpenAI(model_name="gpt-4", temperature=0, openai_api_key=api_key)
+        llm = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=api_key)
         
         template = """
         You are an expert UPS Pilot Assistant. 
