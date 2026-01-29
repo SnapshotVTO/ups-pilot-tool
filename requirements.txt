@@ -1,10 +1,7 @@
 streamlit
 pandas
-openai
+openai==1.6.1
 tiktoken
 faiss-cpu
 pypdf
-langchain
-langchain-community
-langchain-openai
-langchain-text-splitters
+langchain==0.0.350
