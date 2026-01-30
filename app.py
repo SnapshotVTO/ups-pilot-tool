@@ -24,8 +24,12 @@ st.set_page_config(page_title="UPS Pilot Assistant", page_icon="✈️", layout=
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 if "vector_store" not in st.session_state: st.session_state.vector_store = None
 
-# --- HELPER: IMAGE ENCODER ---
+# --- HELPER: IMAGE ENCODER (CRASH FIX APPLIED) ---
 def encode_image(image):
+    # Convert RGBA (Transparency) to RGB to prevent JPEG crash
+    if image.mode in ("RGBA", "P"):
+        image = image.convert("RGB")
+    
     buffered = BytesIO()
     image.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
@@ -71,7 +75,7 @@ with st.sidebar:
                     text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
                     chunks = text_splitter.split_documents(all_docs)
                     
-                    # UPDATED: Explicitly use the modern model
+                    # Explicitly use the modern model
                     embeddings = OpenAIEmbeddings(openai_api_key=api_key, model="text-embedding-3-small")
                     st.session_state.vector_store = FAISS.from_documents(chunks, embeddings)
                     st.success(f"Success! Knowledge Base Updated.")
@@ -116,7 +120,7 @@ with tab2:
         client = OpenAI(api_key=key)
         
         # Prepare content based on file type
-        if uploaded_file.type in ["image/png", "image/jpeg"]:
+        if uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
             image = Image.open(uploaded_file)
             base64_image = encode_image(image)
             content = [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]
@@ -152,56 +156,60 @@ with tab2:
     def calculate_multi_leg_fatigue(legs, is_intl):
         timeline = []
         reservoir = 2800 # Max Fuel
-        current_time = datetime.strptime(f"{legs[0]['date']} {legs[0]['dept_time']}", "%Y-%m-%d %H:%M") - timedelta(hours=1.5) # Report
-        
-        sorted_legs = []
-        for l in legs:
-            dept = datetime.strptime(f"{l['date']} {l['dept_time']}", "%Y-%m-%d %H:%M")
-            arr = datetime.strptime(f"{l['date']} {l['arr_time']}", "%Y-%m-%d %H:%M")
-            if arr < dept: arr += timedelta(days=1)
-            sorted_legs.append({'dept': dept, 'arr': arr, 'orig': l['origin'], 'dest': l['dest']})
+        try:
+            current_time = datetime.strptime(f"{legs[0]['date']} {legs[0]['dept_time']}", "%Y-%m-%d %H:%M") - timedelta(hours=1.5) # Report
             
-        final_time = sorted_legs[-1]['arr'] + timedelta(minutes=30)
-        
-        while current_time <= final_time:
-            in_flight = False
-            for leg in sorted_legs:
-                if leg['dept'] <= current_time <= leg['arr']:
-                    in_flight = True
-                    break
+            sorted_legs = []
+            for l in legs:
+                dept = datetime.strptime(f"{l['date']} {l['dept_time']}", "%Y-%m-%d %H:%M")
+                arr = datetime.strptime(f"{l['date']} {l['arr_time']}", "%Y-%m-%d %H:%M")
+                if arr < dept: arr += timedelta(days=1)
+                sorted_legs.append({'dept': dept, 'arr': arr, 'orig': l['origin'], 'dest': l['dest']})
+                
+            final_time = sorted_legs[-1]['arr'] + timedelta(minutes=30)
             
-            if not in_flight:
-                time_to_next = 999
+            while current_time <= final_time:
+                in_flight = False
                 for leg in sorted_legs:
-                    if leg['dept'] > current_time:
-                        time_to_next = (leg['dept'] - current_time).total_seconds() / 3600
+                    if leg['dept'] <= current_time <= leg['arr']:
+                        in_flight = True
                         break
-                if time_to_next > 10: reservoir = min(2800, reservoir + 200) 
-                else: reservoir -= 2 
-            else:
-                decay = 4
-                if is_intl: decay = 2.5 
-                reservoir -= decay
+                
+                if not in_flight:
+                    time_to_next = 999
+                    for leg in sorted_legs:
+                        if leg['dept'] > current_time:
+                            time_to_next = (leg['dept'] - current_time).total_seconds() / 3600
+                            break
+                    if time_to_next > 10: reservoir = min(2800, reservoir + 200) 
+                    else: reservoir -= 2 
+                else:
+                    decay = 4
+                    if is_intl: decay = 2.5 
+                    reservoir -= decay
 
-            hour = current_time.hour
-            circadian = 0
-            if 2 <= hour <= 6: circadian = 20
-            
-            score = max(0, min(100, (reservoir/2800)*100 - circadian))
-            color = "🟢"
-            if score < 85: color = "🟡"
-            if score < 75: color = "🟠"
-            if score < 70: color = "🔴"
-            if score < 60: color = "🟣"
-            
-            timeline.append({
-                "Time": current_time.strftime("%d/%H:%M"),
-                "Activity": "Fly" if in_flight else "Rest/Duty",
-                "Eff": int(score),
-                "Risk": color
-            })
-            current_time += timedelta(minutes=60)
-        return pd.DataFrame(timeline)
+                hour = current_time.hour
+                circadian = 0
+                if 2 <= hour <= 6: circadian = 20
+                
+                score = max(0, min(100, (reservoir/2800)*100 - circadian))
+                color = "🟢"
+                if score < 85: color = "🟡"
+                if score < 75: color = "🟠"
+                if score < 70: color = "🔴"
+                if score < 60: color = "🟣"
+                
+                timeline.append({
+                    "Time": current_time.strftime("%d/%H:%M"),
+                    "Activity": "Fly" if in_flight else "Rest/Duty",
+                    "Eff": int(score),
+                    "Risk": color
+                })
+                current_time += timedelta(minutes=60)
+            return pd.DataFrame(timeline)
+        except Exception as e:
+            st.error(f"Error calculating fatigue: {e}")
+            return pd.DataFrame()
 
     # 3. INTERFACE
     uploaded_pairing = st.file_uploader("Upload Pairing (Screenshot or PDF)", type=["png", "jpg", "jpeg", "pdf"])
@@ -215,12 +223,14 @@ with tab2:
             st.success("Schedule Extracted Successfully!")
             st.json(schedule_data) 
             results = calculate_multi_leg_fatigue(schedule_data, intl_check)
-            st.divider()
-            st.subheader("Fatigue Analysis")
-            min_score = results['Eff'].min()
-            st.metric("Lowest Effectiveness", f"{min_score}%")
-            if min_score < 70: st.error("⚠️ HIGH FATIGUE RISK DETECTED")
-            st.line_chart(results.set_index("Time")["Eff"])
-            st.dataframe(results, use_container_width=True)
+            
+            if not results.empty:
+                st.divider()
+                st.subheader("Fatigue Analysis")
+                min_score = results['Eff'].min()
+                st.metric("Lowest Effectiveness", f"{min_score}%")
+                if min_score < 70: st.error("⚠️ HIGH FATIGUE RISK DETECTED")
+                st.line_chart(results.set_index("Time")["Eff"])
+                st.dataframe(results, use_container_width=True)
         else:
             st.error("Could not read schedule.")
